@@ -17,6 +17,7 @@ return [
 //'paths' => ['api/*', 'sanctum/csrf-cookie'],
    'allowed_methods' => ['*'],
    'allowed_origins' => [
+       'https://road.gttmco.ir',
        'http://localhost',
        'http://127.0.0.1',
        'http://localhost:5173',
