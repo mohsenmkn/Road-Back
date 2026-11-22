@@ -1,0 +1,9 @@
+{
+  "name": "RoadTransport",
+  "alias": "roadtransport",
+  "description": "Road trip expense management",
+  "keywords": [],
+  "priority": 0,
+  "providers": ["Modules\\RoadTransport\\App\\Providers\\RoadTransportServiceProvider"],
+  "files": []
+}
