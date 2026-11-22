@@ -11,7 +11,7 @@ use Throwable;
 
 class SyncRoadBillsFromBita extends Command
 {
-    protected $signature = 'road-transport:sync-bills {mode=pilisan : pilisan for registered company trucks, all for every bill} {--from= : Earliest Jalali date (YYYY/MM/DD); defaults to the first day of the current Jalali month} {--run-id= : Existing sync status record id}';
+    protected $signature = 'road-transport:sync-bills {mode=pilisan : pilisan for registered company trucks, all for every bill} {--from= : Earliest Jalali date (YYYY/MM/DD); defaults to the first day of the current Jalali month} {--to= : Latest Jalali date (YYYY/MM/DD); defaults to today} {--run-id= : Existing sync status record id}';
 
     protected $description = 'Sync Bita bills backwards weekly, filtering to registered company trucks or all bills';
 
@@ -87,9 +87,26 @@ class SyncRoadBillsFromBita extends Command
             $fromDate = (new Jalalian($current->getYear(), $current->getMonth(), 1, 0, 0, 0, $timezone))->toCarbon()->startOfDay();
         }
 
-        $cursor = $current->toCarbon()->endOfDay();
+        $toOption = trim((string) $this->option('to'));
+        if ($toOption !== '') {
+            $toOption = strtr($toOption, ['۰'=>'0','۱'=>'1','۲'=>'2','۳'=>'3','۴'=>'4','۵'=>'5','۶'=>'6','۷'=>'7','۸'=>'8','۹'=>'9','٠'=>'0','١'=>'1','٢'=>'2','٣'=>'3','٤'=>'4','٥'=>'5','٦'=>'6','٧'=>'7','٨'=>'8','٩'=>'9']);
+            if (!preg_match('/^\d{4}\/\d{2}\/\d{2}$/', $toOption)) {
+                $this->error('فرمت تاریخ پایان باید YYYY/MM/DD باشد؛ نمونه: 1405/08/01');
+                return self::FAILURE;
+            }
+            try {
+                $toDate = Jalalian::fromFormat('Y/m/d', $toOption, $timezone)->toCarbon()->endOfDay();
+            } catch (\Throwable $e) {
+                $this->error('تاریخ پایان جلالی معتبر نیست.');
+                return self::FAILURE;
+            }
+        } else {
+            $toDate = $current->toCarbon()->endOfDay();
+        }
+
+        $cursor = $toDate;
         if ($fromDate->gt($cursor)) {
-            $this->error('تاریخ شروع نمی‌تواند بعد از تاریخ جاری باشد.');
+            $this->error('تاریخ شروع نمی‌تواند بعد از تاریخ پایان باشد.');
             return self::FAILURE;
         }
 

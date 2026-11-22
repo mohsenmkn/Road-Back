@@ -21,6 +21,10 @@ class RoadBitaSyncController extends Controller
 
     public function sync(Request $request)
     {
+        $validated = $request->validate([
+            'from' => ['required', 'regex:/^\d{4}\/\d{2}\/\d{2}$/'],
+            'to' => ['required', 'regex:/^\d{4}\/\d{2}\/\d{2}$/'],
+        ]);
         $run = RoadBitaSyncRun::create([
             'status' => 'running',
             'started_at' => now(),
@@ -30,6 +34,8 @@ class RoadBitaSyncController extends Controller
         try {
             $exitCode = Artisan::call('road-transport:sync-bills', [
                 'mode' => 'pilisan',
+                '--from' => $validated['from'],
+                '--to' => $validated['to'],
                 '--run-id' => $run->id,
             ]);
             $output = trim(Artisan::output());
