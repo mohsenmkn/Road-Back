@@ -7,7 +7,6 @@ use Modules\RoadTransport\App\Models\RoadBill;
 use Modules\RoadTransport\App\Models\RoadBillFinancial;
 use Modules\RoadTransport\App\Models\RoadVehicle;
 use Modules\RoadTransport\App\Models\RoadManualIncome;
-use Modules\RoadTransport\App\Models\RoadIndirectCostCoefficient;
 use Morilog\Jalali\Jalalian;
 
 class BillFinancialService
@@ -54,38 +53,25 @@ class BillFinancialService
             ->where('from_at', '>=', $from)
             ->where('from_at', '<', $to)
             ->orderBy('from_at')->orderBy('id')->get();
-        $costCoefficients = RoadIndirectCostCoefficient::query()->orderBy('id')->get();
         $driver = DB::table('road_vehicle_drivers')->where('vehicle_code', $vehicleCode)->first();
-        $payslip = $driver ? $this->getPayslipSummary((int) $driver->personnel_code, ($year * 100) + $month) : null;
-        $salaryAvailable = $payslip !== null && $payslip->NetPay !== null;
-        $grossSalaryRials = $salaryAvailable
-            ? (int) round((float) $payslip->TotalBenefits)
-            : null;
-        $coefficientCosts = $salaryAvailable
-            ? $costCoefficients->map(fn (RoadIndirectCostCoefficient $coefficient) => [
-                'id' => $coefficient->id,
-                'title' => $coefficient->title,
-                'factor' => $coefficient->factor,
-                'notes' => $coefficient->notes,
-                'net_pay_rials' => (int) round((float) $payslip->NetPay),
-                'amount_rials' => (int) round((float) $payslip->NetPay * (float) $coefficient->factor),
-            ])->values()
-            : collect();
-        $salaryRials = $salaryAvailable
-            ? ($costCoefficients->isNotEmpty()
-                ? (int) $coefficientCosts->sum('amount_rials')
-                : $grossSalaryRials)
-            : null;
+        $driverCosts = $driver
+            ? $equipmentCosts->syncMonthlyDriverCosts(
+                $vehicleCode,
+                (int) $driver->personnel_code,
+                $from->toDateString(),
+                $to->copy()->subDay()->toDateString()
+            )
+            : ['status' => 'driver_not_mapped', 'total_expense' => null, 'total_income' => null, 'details' => [], 'by_account' => []];
+        $driverCostsAvailable = $driverCosts['status'] === 'available';
+        $driverExpenseRials = $driverCostsAvailable ? (int) round($driverCosts['total_expense']) : null;
+        $driverIncomeRials = $driverCostsAvailable ? (int) round($driverCosts['total_income']) : null;
         $equipment = $equipmentCosts->syncMonthlyCosts($vehicleCode, $from->toDateString(), $to->copy()->subDay()->toDateString());
         $equipmentAvailable = $equipment['status'] === 'available';
         $equipmentCostRials = $equipmentAvailable ? (int) round($equipment['total_expense']) : null;
         $equipmentIncomeRials = $equipmentAvailable ? (int) round($equipment['total_income']) : null;
-        $otherIndirectExpenseRials = 0;
-        $totalRevenueRials = (int) $rows->sum('revenue_rials') + (int) $manualIncomes->sum('revenue_rials') + ($equipmentIncomeRials ?? 0);
-        $salaryCostRials = $salaryRials ?? 0;
-        $salaryCostAvailable = $salaryRials !== null;
-        $expensesComplete = $salaryCostAvailable && $equipmentCostRials !== null;
-        $totalExpenseRials = $salaryCostRials + ($equipmentCostRials ?? 0) + $otherIndirectExpenseRials;
+        $totalRevenueRials = (int) $rows->sum('revenue_rials') + (int) $manualIncomes->sum('revenue_rials') + ($equipmentIncomeRials ?? 0) + ($driverIncomeRials ?? 0);
+        $expensesComplete = $driverCostsAvailable && $equipmentCostRials !== null;
+        $totalExpenseRials = ($driverExpenseRials ?? 0) + ($equipmentCostRials ?? 0);
         $billLocations = RoadBill::query()->whereIn('id', $rows->pluck('road_bill_id'))
             ->get(['id', 'driver_name', 'origin', 'destination'])->keyBy('id');
 
@@ -97,11 +83,10 @@ class BillFinancialService
             'to_exclusive' => $to->toDateString(),
             'totals' => [
                 'revenue_rials' => $totalRevenueRials,
-                'salary_rials' => $salaryCostRials,
+                'driver_costs_rials' => $driverExpenseRials,
+                'driver_income_rials' => $driverIncomeRials,
                 'equipment_income_rials' => $equipmentIncomeRials,
                 'equipment_costs_rials' => $equipmentCostRials,
-                'indirect_costs_rials' => $costCoefficients->isNotEmpty() ? ($salaryRials ?? 0) : 0,
-                'cost_coefficients' => $costCoefficients->map(fn (RoadIndirectCostCoefficient $coefficient) => ['title' => $coefficient->title, 'factor' => $coefficient->factor])->values(),
                 'expense_rials' => $totalExpenseRials,
                 'expense_complete' => $expensesComplete,
                 'net_rials' => $expensesComplete ? ($totalRevenueRials - $totalExpenseRials) : null,
@@ -112,31 +97,12 @@ class BillFinancialService
                 'personnel_code' => (int) $driver->personnel_code,
                 'employee_name' => $driver->employee_name,
             ] : null,
-            'salary' => $payslip ? [
-                'issue_year_month' => (int) $payslip->IssueYearMonth,
-                'effective_days' => (float) $payslip->EffectiveDays,
-                'total_benefits' => (float) $payslip->TotalBenefits,
-                'total_deductions' => (float) $payslip->TotalDeductions,
-                'net_pay' => (float) $payslip->NetPay,
-                'net_paid' => (float) $payslip->NetPay,
-                'gross_salary' => $grossSalaryRials,
-                'salary_cost_rials' => $salaryRials,
-            ] : null,
-            'salary_status' => !$driver ? 'driver_not_mapped' : ($salaryAvailable ? 'available' : 'payslip_not_found'),
+            'driver_cost_status' => $driverCosts['status'],
+            'driver_costs' => $driverCosts['details'],
+            'driver_costs_by_account' => $driverCosts['by_account'],
             'equipment_status' => $equipment['status'],
             'equipment' => $equipment['equipment'],
             'equipment_costs' => $equipment['details'],
-            'indirect_expenses' => $salaryAvailable && $driver ? $coefficientCosts->map(fn (array $cost) => [
-                'title' => $cost['title'],
-                'allocation_method' => 'net_pay_coefficient',
-                'vehicle_code' => $vehicleCode,
-                'vehicle_plate' => null,
-                'personnel_code' => (int) $driver->personnel_code,
-                'employee_name' => $driver->employee_name,
-                'effective_days' => (float) $payslip->EffectiveDays,
-                ...$cost,
-                'id' => $cost['id'].'-'.$vehicleCode.'-'.$year.'-'.$month,
-            ])->values() : [],
             'equipment_type' => $equipment['equipment_type'] ?? null,
             'equipment_candidates' => $equipment['equipment_candidates'] ?? [],
             'equipment_types' => $equipment['equipment_types'] ?? [],
@@ -188,10 +154,10 @@ class BillFinancialService
             'vehicle_count' => $vehicles->count(),
             'totals' => [
                 'revenue_rials' => $revenue,
-                'salary_rials' => $sum('salary_rials'),
+                'driver_costs_rials' => $sum('driver_costs_rials'),
+                'driver_income_rials' => $sum('driver_income_rials'),
                 'equipment_income_rials' => $sum('equipment_income_rials'),
                 'equipment_costs_rials' => $sum('equipment_costs_rials'),
-                'indirect_costs_rials' => $sum('indirect_costs_rials'),
                 'expense_rials' => $expenses,
                 'expense_complete' => $incompleteCosts === 0,
                 'net_rials' => $incompleteCosts === 0 ? $revenue - $expenses : null,
@@ -204,15 +170,15 @@ class BillFinancialService
                 'driver' => $item['driver']['employee_name'] ?? null,
                 'personnel_code' => $item['driver']['personnel_code'] ?? null,
                 'revenue_rials' => $item['totals']['revenue_rials'],
-                'salary_rials' => $item['totals']['salary_rials'],
+                'driver_costs_rials' => $item['totals']['driver_costs_rials'],
+                'driver_income_rials' => $item['totals']['driver_income_rials'],
                 'equipment_income_rials' => $item['totals']['equipment_income_rials'],
                 'equipment_costs_rials' => $item['totals']['equipment_costs_rials'],
-                'indirect_costs_rials' => $item['totals']['indirect_costs_rials'],
                 'expense_rials' => $item['totals']['expense_rials'],
                 'expense_complete' => $item['totals']['expense_complete'],
                 'net_rials' => $item['totals']['net_rials'],
                 'bill_count' => $item['totals']['bill_count'],
-                'salary_status' => $item['salary_status'],
+                'driver_cost_status' => $item['driver_cost_status'],
                 'equipment_status' => $item['equipment_status'],
             ])->values(),
         ];
@@ -235,35 +201,4 @@ class BillFinancialService
         return is_numeric($value) ? max(0, (int) round((float) $value)) : 0;
     }
 
-    public function getPayslipSummary(int $personnelCode, int $yearMonth): ?object
-    {
-        return DB::connection('pilsan_sqlsrv')->selectOne(<<<'SQL'
-            SELECT
-                E.Code AS PersonnelCode,
-                P.FullName AS EmployeeName,
-                P.NationalID,
-                P.FatherName,
-                pc.IssueYearMonth,
-                SUM(CASE WHEN CF.Name = 'Effectwork' THEN pci.Value ELSE 0 END) AS EffectiveDays,
-                SUM(CASE WHEN CF.Name = 'BonusSum' THEN pci.Value ELSE 0 END) AS TotalBenefits,
-                SUM(CASE
-                    WHEN CF.Name IN ('EmployeeMainInsurance', 'Tax', 'kasremoaveghe', 'LoanSum') THEN pci.Value
-                    WHEN CF.Name = 'UF636' THEN -pci.Value
-                    ELSE 0
-                END) AS TotalDeductions,
-                SUM(CASE WHEN CF.Name = 'NetPay' THEN pci.Value ELSE 0 END) AS NetPay
-            FROM HCM3.PayCalc pc
-            INNER JOIN HCM3.PayCalcItem pci ON pc.PayCalcID = pci.PayCalcRef
-            INNER JOIN HCM3.CompensationFactor CF ON pci.CompensationFactorRef = CF.CompensationFactorID
-            INNER JOIN HCM3.Employee E ON pc.EmployeeRef = E.EmployeeID
-            INNER JOIN GNR3.Party P ON P.PartyID = E.PartyRef
-            WHERE pc.IssueYearMonth = ?
-              AND E.Code = ?
-              AND CF.Name IN (
-                'Effectwork', 'BonusSum', 'DeductSum', 'NetPay',
-                'EmployeeMainInsurance', 'Tax', 'kasremoaveghe', 'LoanSum', 'UF636'
-              )
-            GROUP BY E.Code, P.FullName, P.NationalID, P.FatherName, pc.IssueYearMonth
-        SQL, [$yearMonth, $personnelCode]);
-    }
 }
