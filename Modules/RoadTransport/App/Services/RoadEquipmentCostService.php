@@ -23,46 +23,19 @@ class RoadEquipmentCostService
     public function getEquipmentCosts(string $equipmentCode, int $typeId, string $fromDate, string $toDate): array
     {
         $equipmentCode = (string) $equipmentCode;
-        // FIN3 can store the personnel dimension in any VoucherItem DL slot.
-        // Keep the established level-5 lookup for equipment types.
-        $dimensionLevels = $typeId === 1 ? [1, 2, 3, 4, 5] : [5];
 
         return DB::connection('gtarabar')
             ->table('FIN3.Voucher as v')
             ->join('FIN3.VoucherItem as vi', 'v.VoucherID', '=', 'vi.VoucherRef')
             ->join('FIN3.SL as sl', 'vi.SLRef', '=', 'sl.SLID')
-            ->join('FIN3.DL as dl', function ($join) use ($dimensionLevels) {
-                $join->on(function ($dimensions) use ($dimensionLevels) {
-                    foreach ($dimensionLevels as $index => $level) {
-                        $condition = static function ($dimension) use ($level) {
-                            $dimension->on('dl.Code', '=', 'vi.DLLevel'.$level)
-                                ->whereColumn('dl.DLTypeRef', '=', 'vi.DLTypeRef'.$level);
-                        };
-
-                        if ($index === 0) {
-                            $dimensions->on($condition);
-                        } else {
-                            $dimensions->orOn($condition);
-                        }
-                    }
-                });
+            ->join('FIN3.DL as dl', function ($join) {
+                $join->on('dl.Code', '=', 'vi.DLLevel5')
+                    ->whereColumn('dl.DLTypeRef', '=', 'vi.DLTypeRef5');
             })
             ->whereDate('v.Date', '>=', $fromDate)
             ->whereDate('v.Date', '<=', $toDate)
-            ->where(function ($dimensions) use ($dimensionLevels, $equipmentCode, $typeId) {
-                foreach ($dimensionLevels as $index => $level) {
-                    $condition = static function ($dimension) use ($level, $equipmentCode, $typeId) {
-                        $dimension->where('vi.DLLevel'.$level, '=', $equipmentCode)
-                            ->where('vi.DLTypeRef'.$level, '=', $typeId);
-                    };
-
-                    if ($index === 0) {
-                        $dimensions->where($condition);
-                    } else {
-                        $dimensions->orWhere($condition);
-                    }
-                }
-            })
+            ->where('vi.DLLevel5', '=', $equipmentCode)
+            ->where('vi.DLTypeRef5', '=', $typeId)
             ->select(
                 'v.VoucherID',
                 'v.Number as voucher_number',
@@ -89,17 +62,20 @@ class RoadEquipmentCostService
     public function syncMonthlyDriverCosts(int $vehicleCode, int $personnelCode, string $fromDate, string $toDate): array
     {
         try {
-            // In FIN3, driver costs are dimensioned by personnel code under DL type 1.
-            $sourceCosts = $this->getEquipmentCosts((string) $personnelCode, 1, $fromDate, $toDate);
+            // FIN3 stores personnel dimensions as six-character codes (for example 000084),
+            // while the local personnel_code column is numeric and drops leading zeroes.
+            $equipmentCode = str_pad((string) $personnelCode, 6, '0', STR_PAD_LEFT);
+            $sourceCosts = $this->getEquipmentCosts($equipmentCode, 1, $fromDate, $toDate);
         } catch (\Throwable $exception) {
             Log::warning('Unable to retrieve driver costs from Gtarabar.', [
                 'vehicle_code' => $vehicleCode,
                 'personnel_code' => $personnelCode,
                 'exception' => get_class($exception),
             ]);
-            return ['status' => 'source_unavailable', 'total_expense' => null, 'total_income' => null, 'details' => [], 'by_account' => []];
+            return ['status' => 'source_unavailable', 'source_count' => null, 'total_expense' => null, 'total_income' => null, 'details' => [], 'by_account' => []];
         }
 
+        $sourceCount = count($sourceCosts);
         $now = now();
         $rows = array_values(array_filter(array_map(fn ($cost) => [
             'vehicle_code' => $vehicleCode,
@@ -152,6 +128,7 @@ class RoadEquipmentCostService
 
         return [
             'status' => 'available',
+            'source_count' => $sourceCount,
             'total_expense' => (float) $details->sum('debit'),
             'total_income' => (float) $details->sum('credit'),
             'details' => $details->values(),

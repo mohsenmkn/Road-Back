@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Modules\RoadTransport\App\Models\RoadVehicle;
 use Modules\RoadTransport\App\Models\RoadManualIncome;
+use Modules\RoadTransport\App\Models\RoadManualExpense;
 use Modules\RoadTransport\App\Services\BillFinancialService;
 use Modules\RoadTransport\App\Services\RoadEquipmentCostService;
 use Morilog\Jalali\Jalalian;
@@ -26,6 +27,21 @@ class BillFinancialController extends Controller
         $data['entered_by'] = $request->user()->id;
         $income = RoadManualIncome::create($data);
         return response()->json(['data' => $income], 201);
+    }
+
+    public function storeManualExpense(Request $request)
+    {
+        $data = $request->validate([
+            'vehicle_code' => ['required', 'integer', Rule::exists('road_vehicles', 'vehicle_code')],
+            'subject' => ['required', 'string', 'max:150'],
+            'spent_at' => ['required', 'date'],
+            'amount_rials' => ['required', 'integer', 'min:1', 'max:999999999999'],
+            'description' => ['nullable', 'string', 'max:2000'],
+        ]);
+        $data['entered_by'] = $request->user()->id;
+        $expense = RoadManualExpense::create($data);
+
+        return response()->json(['data' => $expense], 201);
     }
 
     public function vehicles()

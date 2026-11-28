@@ -29,6 +29,7 @@ Route::middleware(['auth:sanctum', 'user.can_login'])->prefix('v1/road-transport
     Route::post('bill-financials/bita-sync', [RoadBitaSyncController::class, 'sync'])->middleware('permission:road_bills.sync');
     Route::get('bill-financials/monthly', [BillFinancialController::class, 'monthly'])->middleware('permission:road_expenses.read');
     Route::post('bill-financials/manual-income', [BillFinancialController::class, 'storeManualIncome'])->middleware('permission:road_manual_income.create');
+    Route::post('bill-financials/manual-expense', [BillFinancialController::class, 'storeManualExpense'])->middleware('permission:road_manual_income.create');
     Route::get('bill-financials/indirect-expenses', [RoadIndirectCostCoefficientController::class, 'index'])->middleware('permission:road_indirect_cost.manage');
     Route::post('bill-financials/indirect-expenses', [RoadIndirectCostCoefficientController::class, 'store'])->middleware('permission:road_indirect_cost.manage');
     Route::put('bill-financials/indirect-expenses/{coefficient}', [RoadIndirectCostCoefficientController::class, 'update'])->middleware('permission:road_indirect_cost.manage');
